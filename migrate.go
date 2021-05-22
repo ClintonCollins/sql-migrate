@@ -3,9 +3,11 @@ package migrate
 import (
 	"bytes"
 	"database/sql"
+	"embed"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"path"
@@ -230,6 +232,41 @@ var _ MigrationSource = (*HttpFileSystemMigrationSource)(nil)
 
 func (f HttpFileSystemMigrationSource) FindMigrations() ([]*Migration, error) {
 	return findMigrations(f.FileSystem)
+}
+
+// A set of migrations loaded from embed FS
+
+type EmbedFSMigrationSource struct {
+	Filesystem embed.FS
+}
+
+var _ MigrationSource = (*EmbedFSMigrationSource)(nil)
+
+func (f EmbedFSMigrationSource) FindMigrations() ([]*Migration, error) {
+	migrations := make([]*Migration, 0)
+	fsErr := fs.WalkDir(f.Filesystem, ".", func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !strings.HasSuffix(d.Name(), ".sql") || d.IsDir() {
+			return nil
+		}
+		fData, iErr := f.Filesystem.ReadFile(path)
+		if iErr != nil {
+			return iErr
+		}
+		r := bytes.NewReader(fData)
+		migration, mErr := ParseMigration(d.Name(), r)
+		if mErr != nil {
+			return mErr
+		}
+		migrations = append(migrations, migration)
+		return nil
+	})
+	if fsErr != nil {
+		return nil, fsErr
+	}
+	return migrations, nil
 }
 
 // A set of migrations loaded from a directory.
